@@ -68,6 +68,7 @@ app.get("/health", (req, res) => {
 /**
  * Readiness probe (DB + Redis)
  */
+
 app.get("/ready", async (req, res) => {
   const checks: Record<string, string> = {
     database: "down",
