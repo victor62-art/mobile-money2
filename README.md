@@ -12,6 +12,9 @@ A backend service that bridges mobile money providers (MTN, Airtel, Orange) with
 - Stellar blockchain integration
 - RESTful API and GraphQL (`/graphql`)
 - PostgreSQL database
+- Redis (for queues and locking)
+- Background processing (BullMQ)
+- Email notifications (Nodemailer)
 - Docker support
 - TypeScript
 
@@ -161,6 +164,22 @@ If not specified, the system uses the default values shown above.
 
 When a transaction is rejected due to limit exceeded, the error response includes your current KYC level, remaining limit, and upgrade suggestions.
 
+## Stellar Network Configuration
+
+The application supports both Stellar `testnet` and `mainnet`. You can switch between them using the `STELLAR_NETWORK` environment variable.
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `STELLAR_NETWORK` | The Stellar network to use (`testnet` or `mainnet`) | `testnet` |
+| `ALLOW_MAINNET_IN_DEV` | Allow using mainnet when `NODE_ENV=development` | `false` |
+
+### Safety Measures
+
+- **Development Guard**: By default, the application will refuse to start on `mainnet` if `NODE_ENV` is set to `development`. This prevents accidental transactions on the live network during development.
+- **Startup Logs**: The application logs the current network on startup with a clear warning if `mainnet` is active.
+
 ## Git Hooks
 
 This project uses [Husky](https://typicode.github.io/husky/) to enforce code quality via Git hooks.
@@ -196,6 +215,18 @@ git commit -m "Your message" --no-verify
 - `POST /api/transactions/deposit` - Deposit from mobile money to Stellar
 - `POST /api/transactions/withdraw` - Withdraw from Stellar to mobile money
 - `GET /api/transactions/:id` - Get transaction status
+
+#### Transaction Idempotency
+
+Send an `Idempotency-Key` header on `POST /api/transactions/deposit` and
+`POST /api/transactions/withdraw` when the client may retry the same request.
+
+- duplicate requests with the same active key return the existing transaction
+  with HTTP `200`
+- keys remain active for `24` hours by default
+- expired keys are cleared during cleanup so they can be reused safely later
+- race conditions are still protected by the database unique index on
+  `transactions.idempotency_key`
 
 ### Statistics & Metrics
 
@@ -236,11 +267,11 @@ Allows users to view their transaction history with built-in pagination and date
 | :---------- | :----- | :---------- |
 | `startDate` | string | ISO 8601 format (e.g., 2026-03-01). |
 | `endDate`   | string | ISO 8601 format (e.g., 2026-03-31). |
-| `page`      | number | The page number to retrieve (Default: 1). |
-| `limit`     | number | Number of transactions per page (Default: 10). |
+| `offset`    | number | The number of items to skip (Default: 0). |
+| `limit`     | number | Number of transactions per page (Default: 20, Max: 100). |
 
 **Example Request:**
-`GET /api/transactions?startDate=2026-03-01&endDate=2026-03-31&page=1&limit=5`
+`GET /api/transactions?startDate=2026-03-01&endDate=2026-03-31&offset=0&limit=5`
 
 **Validation Rules:**
 - Returns `400 Bad Request` if the date format is not ISO 8601.
