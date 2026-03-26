@@ -19,3 +19,4 @@ update-issues.sh
 update-all-issues.sh
 update-issues-batch*.sh
 run-all-updates.sh
+create-next-100-issues.sh
