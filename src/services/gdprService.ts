@@ -71,12 +71,18 @@ export class GDPRService {
     return `${this.hashString(email).slice(4, 8)}-${uuid()}@anonymized.local`;
   }
 
-  async anonymizePhoneNumber(phone: string ) {
+  async anonymizePhoneNumber(phone: string) {
     return this.hashString(phone);
   }
 
-  async anonymizeStellaAddress(addr: string ) {
+  async anonymizeStellaAddress(addr: string) {
     return this.hashString(addr);
   }
-  
+
+  async anonymizeBackupCode(code: string[]) {
+    return code
+      .map((c) => this.hashString(c))
+      .join("")
+      .slice(3, 12);
+  }
 }
