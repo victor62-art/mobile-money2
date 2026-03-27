@@ -1,5 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { updateAdminNotesHandler } from "../controllers/transactionController";
+import {
+  DashboardConfig,
+  validateDashboardConfig,
+  DASHBOARD_CONFIG_VALIDATION_ERRORS,
+} from "../utils/dashboardConfig";
 import { MobileMoneyService } from "../services/mobilemoney/mobileMoneyService";
 import { getQueueStats } from "../queue/transactionQueue";
 import { redisClient } from "../config/redis";
@@ -11,6 +16,7 @@ interface User {
   id: string;
   role: string;
   locked?: boolean;
+  dashboard_config?: DashboardConfig;
   [key: string]: unknown;
 }
 
@@ -152,6 +158,69 @@ router.post(
 
 /**
  * =========================
+ * DASHBOARD CONFIGURATION
+ * =========================
+ */
+
+// GET /api/admin/users/:id/dashboard-config
+router.get(
+  "/users/:id/dashboard-config",
+  requireAdmin,
+  logAdminAction("GET_DASHBOARD_CONFIG"),
+  (req: Request, res: Response) => {
+    const user = users.find((u) => u.id === req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const config = user.dashboard_config || {
+      layout: "grid",
+      widgets: [],
+    };
+
+    res.json({
+      userId: user.id,
+      config,
+    });
+  },
+);
+
+// PUT /api/admin/users/:id/dashboard-config
+router.put(
+  "/users/:id/dashboard-config",
+  requireAdmin,
+  logAdminAction("UPDATE_DASHBOARD_CONFIG"),
+  (req: Request, res: Response) => {
+    const user = users.find((u) => u.id === req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const { config } = req.body;
+
+    // Validate the dashboard config against the JSON schema
+    if (!validateDashboardConfig(config)) {
+      return res.status(400).json({
+        message: "Invalid dashboard configuration",
+        errors: DASHBOARD_CONFIG_VALIDATION_ERRORS,
+      });
+    }
+
+    // Save the configuration
+    user.dashboard_config = config;
+
+    res.json({
+      message: "Dashboard configuration saved",
+      userId: user.id,
+      config: user.dashboard_config,
+    });
+  },
+);
+
+/**
+ * =========================
  * TRANSACTIONS
  * =========================
  */
@@ -197,6 +266,7 @@ router.patch(
   updateAdminNotesHandler,
 );
 
+export const adminRoutes = router;
 /**
  * =========================
  * HEALTH & MONITORING
