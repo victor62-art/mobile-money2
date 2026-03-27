@@ -66,4 +66,10 @@ export class GDPRService {
       b: this.hashString(tx.stellarAddress),
     };
   }
+
+  async anonymizeEmail(email: string ) {
+    return `${this.hashString(email).slice(4, 8)}-${uuid()}@anonymized.local`;
+  }
+
+
 }
