@@ -27,6 +27,7 @@ import {
   vaultRoutesV1,
 } from "./routes/v1";
 import { transactionRoutes } from "./routes/transactions";
+import { authRoutes } from "./routes/auth";
 import { bulkRoutes } from "./routes/bulk";
 import { transactionDisputeRoutes, disputeRoutes } from "./routes/disputes";
 import { statsRoutes } from "./routes/stats";
@@ -35,6 +36,7 @@ import { reportsRoutes } from "./routes/reports";
 import { createKYCRoutes } from "./routes/kycRoutes";
 import { vaultRoutes } from "./routes/vaults";
 import { adminRoutes } from "./routes/admin";
+import { makerCheckerRoutes } from "./routes/makerChecker";
 import { userRoutes } from "./routes/users";
 import { authRoutes } from "./routes/auth";
 import { errorHandler } from "./middleware/errorHandler";
@@ -210,6 +212,7 @@ app.use("/oauth", createOAuthRouter());
 app.use("/api/auth", authRoutes);
 
 app.use("/api/v1/transactions", transactionRoutesV1);
+app.use("/api/auth", authRoutes);
 app.use("/api/v1/transactions", transactionDisputeRoutesV1);
 app.use("/api/v1/transactions/bulk", bulkRoutesV1);
 app.use("/api/v1/disputes", disputeRoutesV1);
