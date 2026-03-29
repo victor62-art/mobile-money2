@@ -156,18 +156,3 @@ Jest did not exit one second after the test run has completed.
       at console.log (node_modules/@jest/console/build/CustomConsole.js:141:10)
       at FSWatcher.<anonymous> (src/middleware/rbac.ts:34:29)
 
-
-  ●  Cannot log after tests are done. Did you forget to wait for something async in your test?
-    Attempted to log "Casbin policy file changed, reloading policies...".
-
-    [0m [90m 32 |[39m           console[33m.[39mlog([32m'Casbin policy file changed, reloading policies...'[39m)[33m;[39m
-     [90m 33 |[39m           [36mawait[39m enforcer[33m.[39mloadPolicy()[33m;[39m
-    [31m[1m>[22m[39m[90m 34 |[39m         }
-     [90m    |[39m          [31m[1m^[22m[39m
-     [90m 35 |[39m       })[33m;[39m
-     [90m 36 |[39m       isWatching [33m=[39m [36mtrue[39m[33m;[39m
-     [90m 37 |[39m     }[0m
-
-      at console.log (node_modules/@jest/console/build/CustomConsole.js:141:10)
-      at FSWatcher.<anonymous> (src/middleware/rbac.ts:34:29)
-
