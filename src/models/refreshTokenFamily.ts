@@ -92,6 +92,40 @@ export class RefreshTokenFamilyModel {
     }
   }
 
+  async purgeExpired() {
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      // Get all expired tokens
+      const expiredTokenResult = await client.query(
+        `SELECT token_jti FROM refresh_token_families
+        WHERE revoked_at < NOW() - INTERVAL '30 days'`,
+      );
+      
+      // Delete all expired tokens
+      const deleteResult = await client.query(
+        `DELETE FROM refresh_token_families
+            WHERE revoked_at < NOW() - INTERVAL '30 days'`,
+      );
+
+      await client.query("COMMIT");
+
+      return {
+        data: {
+          expiredTokenResult,
+          purgedCount: deleteResult.rowCount,
+        },
+      };
+    } catch (err: any) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async isRevoked(token: string) {
     const result = await queryRead(
       `SELECT is_revoked FROM refresh_token_families WHERE token = $1`,
