@@ -59,6 +59,7 @@ import {
 import { requireAuth } from "./middleware/auth";
 import { responseTime } from "./middleware/responseTime";
 import { requestId } from "./middleware/requestId";
+import { i18nMiddleware } from "./utils/i18n";
 import { metricsMiddleware } from "./middleware/metrics";
 import { validateStellarNetwork, logStellarNetwork } from "./config/stellar";
 import { sessionAnomalyLogger } from "./services/logger";
@@ -66,12 +67,14 @@ import { HealthCheckResponse, ReadinessCheckResponse } from "./types/api";
 import { privacyRoutes } from "./routes/privacy";
 import sep31Router from "./stellar/sep31";
 import sep24Router from "./stellar/sep24";
+import sep38Router from "./stellar/sep38";
 import { createSep12Router } from "./stellar/sep12";
 import { createSep10Router } from "./stellar/sep10";
 import tomlRouter from "./routes/toml";
 
 // 1. Import Sentry Middleware
 import { initSentry, sentryBreadcrumbMiddleware } from "./middleware/sentry";
+import { WebSocketManager } from "./websocket";
 
 dotenv.config();
 
@@ -148,6 +151,7 @@ app.use(
 app.use(rateLimitMiddleware);
 app.use(responseTime);
 app.use(requestId);
+app.use(i18nMiddleware);
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (isShuttingDown) {
@@ -243,6 +247,64 @@ app.get("/ready", async (_req: Request, res: Response) => {
   res.status(allReady ? 200 : 503).json(body);
 });
 
+
+// Load Balancer Health Check
+let lbHealthCache: { data: any, timestamp: number } | null = null;
+const LB_HEALTH_CACHE_TTL = 5000;
+
+app.get("/health/lb", async (req: Request, res: Response) => {
+  const now = Date.now();
+  if (lbHealthCache && (now - lbHealthCache.timestamp < LB_HEALTH_CACHE_TTL)) {
+    res.status(lbHealthCache.data.status === "ok" ? 200 : 503).json(lbHealthCache.data);
+    return;
+  }
+
+  const checks: Record<string, string> = {
+    database: "down",
+    redis: "down",
+    memory: "ok"
+  };
+  let healthy = true;
+
+  if (isShuttingDown) {
+    healthy = false;
+  }
+
+  try {
+    await pool.query("SELECT 1");
+    checks.database = "ok";
+  } catch (err) {
+    healthy = false;
+  }
+
+  try {
+    if (redisClient?.isOpen) {
+      await redisClient.ping();
+      checks.redis = "ok";
+    } else {
+      checks.redis = "closed";
+      healthy = false;
+    }
+  } catch (err) {
+    healthy = false;
+  }
+
+  const memUsage = process.memoryUsage();
+  if (memUsage.heapUsed > 1024 * 1024 * 1024) { // 1GB limit
+    checks.memory = "high";
+    healthy = false;
+  }
+
+  const responseData = {
+    status: healthy ? "ok" : "error",
+    checks,
+    timestamp: new Date().toISOString()
+  };
+
+  lbHealthCache = { data: responseData, timestamp: now };
+  res.status(healthy ? 200 : 503).json(responseData);
+});
+
 app.use(globalTimeout);
 app.use(haltOnTimedout);
 
@@ -292,6 +354,7 @@ app.use("/api/admin", requireAuth, adminRoutes);
 app.use("/sep10", createSep10Router());
 app.use("/sep31", sep31Router);
 app.use("/sep24", sep24Router);
+app.use("/sep38", sep38Router);
 app.use("/sep12", createSep12Router(pool));
 app.use("/sep10", createSep10Router());
 app.use("/.well-known/stellar.toml", tomlRouter);
@@ -408,10 +471,16 @@ process.once("SIGINT", () => {
   void gracefulShutdown("SIGINT");
 });
 
+export let wsManager: WebSocketManager | null = null;
+
 async function initializeRuntime(): Promise<void> {
   if (process.env.NODE_ENV === "test") {
     return;
   }
+
+  // Initialize background jobs and monitoring
+  const { startJobs } = await import("./jobs/scheduler");
+  startJobs();
 
   const { getQueueHealth, pauseQueueEndpoint, resumeQueueEndpoint } =
     await import("./queue/health");
@@ -455,6 +524,9 @@ async function initializeRuntime(): Promise<void> {
     server = app.listen(PORT, () =>
       console.log(`HTTP/1.1 server running on http://localhost:${PORT}`),
     );
+
+    wsManager = new WebSocketManager(server);
+    console.log("WebSocket server attached");
   }
 }
 
