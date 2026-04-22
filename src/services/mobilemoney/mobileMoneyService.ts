@@ -27,6 +27,7 @@ interface ProviderExecutionResult {
   provider?: string;
   data?: unknown;
   error?: unknown;
+  providerResponseTimeMs?: number;
 }
 
 class MobileMoneyError extends Error {
@@ -136,12 +137,14 @@ export class MobileMoneyService {
     op: "requestPayment" | "sendPayout",
     phoneNumber: string,
     amount: string,
-  ) {
-    if (op === "requestPayment") {
-      return provider.requestPayment(phoneNumber, amount);
-    }
+  ): Promise<{ success: boolean; data?: unknown; error?: unknown; providerResponseTimeMs: number }> {
+    const startTime = performance.now();
+    const result = op === "requestPayment"
+      ? await provider.requestPayment(phoneNumber, amount)
+      : await provider.sendPayout(phoneNumber, amount);
+    const providerResponseTimeMs = Math.round((performance.now() - startTime) * 100) / 100;
 
-    return provider.sendPayout(phoneNumber, amount);
+    return { ...result, providerResponseTimeMs };
   }
 
   private getOperationType(op: "requestPayment" | "sendPayout") {
@@ -192,6 +195,7 @@ export class MobileMoneyService {
               success: true,
               provider: providerKey,
               data: result.data,
+              providerResponseTimeMs: result.providerResponseTimeMs,
             };
           }
 
@@ -272,14 +276,14 @@ export class MobileMoneyService {
       amount,
     );
 
-    // result shape: { success: true, provider: <usedProvider>, data }
+    // result shape: { success: true, provider: <usedProvider>, data, providerResponseTimeMs }
     if (result.success) {
       transactionTotal.inc({
         type: "payment",
         provider: result.provider as string,
         status: "success",
       });
-      return { success: true, data: result.data };
+      return { success: true, data: result.data, providerResponseTimeMs: result.providerResponseTimeMs };
     }
 
     // Shouldn't reach here; safeguard
@@ -305,7 +309,7 @@ export class MobileMoneyService {
         provider: result.provider as string,
         status: "success",
       });
-      return { success: true, data: result.data };
+      return { success: true, data: result.data, providerResponseTimeMs: result.providerResponseTimeMs };
     }
 
     throw new MobileMoneyError(
