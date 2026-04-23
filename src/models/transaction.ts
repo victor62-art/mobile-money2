@@ -84,6 +84,10 @@ export interface Transaction {
 providerReference?: string | null;
   stellarAddress: string;
   status: TransactionStatus;
+  // NEW fields
+  assetType: AssetType;
+  assetCode?: string;   // e.g. 'USDC' — only for anchored assets
+  assetIssuer?: string; // issuer address — only for anchored assets
   tags: string[];
   notes?: string;
   adminNotes?: string;
