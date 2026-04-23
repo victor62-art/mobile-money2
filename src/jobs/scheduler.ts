@@ -59,6 +59,8 @@ const JOBS: JobConfig[] = [
     // Every 30 seconds - monitors and bumps fees for stuck transactions
     schedule: process.env.FEE_BUMP_CRON || "*/30 * * * * *",
     handler: runFeeBumpJob,
+  },
+  {
     name: "provider-balance-alert",
     // Every 10 minutes - checks MTN/Airtel operational balances and alerts treasury when low
     schedule: process.env.PROVIDER_BALANCE_ALERT_CRON || "*/10 * * * *",

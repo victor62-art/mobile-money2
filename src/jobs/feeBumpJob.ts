@@ -106,7 +106,7 @@ async function performFeeBump(
     const newFee = Math.min(previousFee * 2, 100000); // Max 1 XLM in stroops
 
     const transaction = new StellarSdk.TransactionBuilder(account, {
-      fee: newFee,
+      fee: newFee.toString(),
       networkPassphrase: getNetworkPassphrase(),
     })
       .addOperation(

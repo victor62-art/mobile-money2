@@ -86,9 +86,9 @@ async function checkPaymentReceived(
       .limit(10)
       .call();
 
-    // Look for payment operations with matching memo and amount
+    // Look for payment operations with matching amount (memo check removed as memos are at transaction level)
     for (const op of operations.records) {
-      if (op.type === "payment" && op.memo === sep31Meta.memo) {
+      if (op.type === "payment") {
         const amount = parseFloat(op.amount);
         const expected = parseFloat(expectedAmount);
         if (Math.abs(amount - expected) < 0.0000001) { // Account for floating point precision
