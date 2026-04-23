@@ -45,6 +45,11 @@ jobs:
           node-version: "20"
           cache: npm
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvips-dev libjpeg-dev libpng-dev libtiff-dev libgif-dev librsvg2-dev libpoppler-cpp-dev libcairo2-dev libpango1.0-dev libjpeg8-dev libgif-dev build-essential
+
       - name: Verify package-lock.json exists
         run: |
           if [ ! -f package-lock.json ]; then
