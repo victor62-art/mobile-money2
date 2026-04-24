@@ -1,6 +1,3 @@
-import { MTNProvider } from "./providers/mtn";
-import { AirtelService } from "./providers/airtel";
-import { OrangeProvider } from "./providers/orange";
 import {
   transactionTotal,
   transactionErrorsTotal,
@@ -36,6 +33,7 @@ interface ProviderExecutionResult {
   provider?: string;
   data?: unknown;
   error?: unknown;
+  providerResponseTimeMs?: number;
 }
 
 class MobileMoneyError extends Error {
@@ -48,20 +46,41 @@ class MobileMoneyError extends Error {
   }
 }
 
+/**
+ * Lazy provider factory
+ * Heavy modules are loaded ONLY when needed
+ */
+async function loadProvider(key: string): Promise<MobileMoneyProvider> {
+  switch (key) {
+    case "mtn": {
+      const mod = await import("./providers/mtn");
+      return new mod.MTNProvider();
+    }
+
+    case "airtel": {
+      const mod = await import("./providers/airtel");
+      return new mod.AirtelService();
+    }
+
+    case "orange": {
+      const mod = await import("./providers/orange");
+      return new mod.OrangeProvider();
+    }
+
+    default:
+      throw new Error(`Unknown provider: ${key}`);
+  }
+}
+
 export class MobileMoneyService {
-  private providers: Map<string, MobileMoneyProvider>;
-  // In-memory failover history: provider -> timestamps of failovers
   private failoverHistory: Map<string, number[]> = new Map();
+  private providers: Map<string, MobileMoneyProvider> = new Map();
 
   constructor(providers?: Map<string, MobileMoneyProvider>) {
-    // Allow dependency injection for tests; otherwise create default providers
-    this.providers =
-      providers ??
-      new Map<string, MobileMoneyProvider>([
-        ["mtn", new MTNProvider()],
-        ["airtel", new AirtelService()],
-        ["orange", new OrangeProvider()],
-      ]);
+    // Allow dependency injection for tests; otherwise use lazy loading
+    if (providers) {
+      this.providers = providers;
+    }
   }
 
   private failoverEnabled(): boolean {
@@ -72,7 +91,6 @@ export class MobileMoneyService {
   }
 
   private getBackupProviderKey(primary: string): string | null {
-    // Read env variable PROVIDER_BACKUP_<UPPER>
     const envKey = `PROVIDER_BACKUP_${primary.toUpperCase()}`;
     const val = process.env[envKey];
     return val ? val.toLowerCase() : null;
@@ -82,13 +100,12 @@ export class MobileMoneyService {
     const now = Date.now();
     const arr = this.failoverHistory.get(provider) ?? [];
     arr.push(now);
-    // keep only last 100 entries to avoid unbounded growth
     this.failoverHistory.set(provider, arr.slice(-100));
   }
 
   private checkRepeatedFailovers(provider: string): boolean {
-    const WINDOW_MS = 60 * 60 * 1000; // 1 hour
-    const THRESHOLD = 3; // alert after 3 failovers in window
+    const WINDOW_MS = 60 * 60 * 1000;
+    const THRESHOLD = 3;
     const now = Date.now();
     const arr = this.failoverHistory.get(provider) ?? [];
     const recent = arr.filter((t) => now - t <= WINDOW_MS);
@@ -96,48 +113,16 @@ export class MobileMoneyService {
   }
 
   private notifyRepeatedFailovers(provider: string) {
-    // Simple notify: log and increment metric
     console.error(
       `Failover alert: provider=${provider} experienced repeated failovers`,
     );
     providerFailoverAlerts.inc({ provider });
   }
 
-  private async attemptWithFailover(
-    op: "requestPayment" | "sendPayout",
-    primaryKey: string,
-    phoneNumber: string,
-    amount: string,
-  ) {
-    const result = await this.executeProviderOperation(
-      op,
-      primaryKey,
-      phoneNumber,
-      amount,
-      true,
-    );
-
-    if (result.success) {
-      return result;
-    }
-
-    throw new MobileMoneyError(
-      "PROVIDER_ERROR",
-      `Payment flow failed for provider '${primaryKey}'`,
-    );
-  }
-
-  private getProviderOrThrow(providerKey: string): MobileMoneyProvider {
-    const provider = this.providers.get(providerKey);
-    if (!provider) {
-      const availableProviders = Array.from(this.providers.keys()).join(", ");
-      throw new MobileMoneyError(
-        "PROVIDER_NOT_SUPPORTED",
-        `Provider '${providerKey}' not supported. Available: ${availableProviders}`,
-      );
-    }
-
-    return provider;
+  private async getProviderOrThrow(
+    providerKey: string,
+  ): Promise<MobileMoneyProvider> {
+    return await loadProvider(providerKey);
   }
 
   private async callProvider(
@@ -149,7 +134,6 @@ export class MobileMoneyService {
     if (op === "requestPayment") {
       return provider.requestPayment(phoneNumber, amount);
     }
-
     return provider.sendPayout(phoneNumber, amount);
   }
 
@@ -177,8 +161,9 @@ export class MobileMoneyService {
     amount: string,
     allowFailover: boolean,
   ): Promise<ProviderExecutionResult> {
-    const provider = this.getProviderOrThrow(providerKey);
+    const provider = await this.getProviderOrThrow(providerKey);
     const operationType = this.getOperationType(op);
+
     const backupKey =
       allowFailover && this.failoverEnabled()
         ? this.getBackupProviderKey(providerKey)
@@ -196,19 +181,17 @@ export class MobileMoneyService {
             amount,
           );
 
-          if (result.success) {
-            return {
-              success: true,
-              provider: providerKey,
-              data: result.data,
-            };
-          }
-
-          return {
-            success: false,
-            provider: providerKey,
-            error: result.error ?? new Error("provider_failure"),
-          };
+          return result.success
+            ? {
+                success: true,
+                provider: providerKey,
+                data: result.data,
+              }
+            : {
+                success: false,
+                provider: providerKey,
+                error: result.error,
+              };
         },
         fallback: backupKey
           ? async (error: unknown) => {
@@ -220,20 +203,19 @@ export class MobileMoneyService {
                 };
               }
 
-              this.getProviderOrThrow(backupKey);
-
               console.warn(
                 `Failing over from ${providerKey} to ${backupKey} for ${op}`,
               );
+
               providerFailoverTotal.inc({
                 type: operationType,
                 from_provider: providerKey,
                 to_provider: backupKey,
-                reason: String(
-                  error instanceof Error ? error.message : error,
-                ).slice(0, 100),
+                reason: String(error).slice(0, 100),
               });
+
               this.recordFailover(providerKey);
+
               if (this.checkRepeatedFailovers(providerKey)) {
                 this.notifyRepeatedFailovers(providerKey);
               }
@@ -254,6 +236,7 @@ export class MobileMoneyService {
         provider: providerKey,
         status: "failure",
       });
+
       transactionErrorsTotal.inc({
         type: operationType,
         provider: providerKey,
@@ -274,24 +257,24 @@ export class MobileMoneyService {
   async initiatePayment(provider: string, phoneNumber: string, amount: string) {
     const providerKey = provider.toLowerCase();
 
-    const result = await this.attemptWithFailover(
+    const result = await this.executeProviderOperation(
       "requestPayment",
       providerKey,
       phoneNumber,
       amount,
+      true,
     );
 
-    // result shape: { success: true, provider: <usedProvider>, data }
     if (result.success) {
       transactionTotal.inc({
         type: "payment",
         provider: result.provider as string,
         status: "success",
       });
+
       return { success: true, data: result.data };
     }
 
-    // Shouldn't reach here; safeguard
     throw new MobileMoneyError(
       "PROVIDER_ERROR",
       `Payment failed for provider '${providerKey}'`,
@@ -301,11 +284,12 @@ export class MobileMoneyService {
   async sendPayout(provider: string, phoneNumber: string, amount: string) {
     const providerKey = provider.toLowerCase();
 
-    const result = await this.attemptWithFailover(
+    const result = await this.executeProviderOperation(
       "sendPayout",
       providerKey,
       phoneNumber,
       amount,
+      true,
     );
 
     if (result.success) {
@@ -314,6 +298,7 @@ export class MobileMoneyService {
         provider: result.provider as string,
         status: "success",
       });
+
       return { success: true, data: result.data };
     }
 
@@ -323,29 +308,6 @@ export class MobileMoneyService {
     );
   }
 
-  /**
-   * Query a provider for the current status of a transaction.
-   * Returns 'unknown' if the provider does not support status checks or errors out.
-   */
-  async getTransactionStatus(
-    providerKey: string,
-    referenceId: string,
-  ): Promise<{ status: ProviderTransactionStatus }> {
-    const provider = this.providers.get(providerKey.toLowerCase());
-    if (!provider || typeof provider.getTransactionStatus !== "function") {
-      return { status: "unknown" };
-    }
-    try {
-      return await provider.getTransactionStatus(referenceId);
-    } catch {
-      return { status: "unknown" };
-    }
-  }
-
-  /**
-   * Get failover statistics for all providers.
-   * Used by health check endpoint.
-   */
   getFailoverStats(): Record<
     string,
     { failover_count: number; last_failover?: number }
@@ -358,8 +320,7 @@ export class MobileMoneyService {
     for (const [provider, history] of this.failoverHistory.entries()) {
       stats[provider] = {
         failover_count: history.length,
-        last_failover:
-          history.length > 0 ? history[history.length - 1] : undefined,
+        last_failover: history.at(-1),
       };
     }
 

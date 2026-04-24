@@ -1,23 +1,22 @@
 import { Router, Request, Response } from 'express';
 import { generateToken, verifyToken, JWTPayload, generateRefreshToken, verifyRefreshToken } from '../auth/jwt';
 import { createSSORouter } from '../auth/sso';
+import { createOIDCRouter, initializeOIDCProviders } from '../auth/oidc';
 import { enforceSSOForEmployees } from '../middleware/ssoEnforcement';
 import { tokenController } from '../controllers/tokenController';
 import { authenticateToken } from '../middleware/auth';
-import { authenticateUser, getUserPermissions, getUserByPhoneNumber } from '../services/userService';
-import {
-  getLockoutStatus,
-  recordFailedAttempt,
-  recordSuccessfulLogin,
-} from '../auth/lockout';
-import { EmailService } from '../services/email';
-
-const emailService = new EmailService();
+import { authenticateUser, getUserPermissions, User } from '../services/userService';
+import { verifyTOTPToken, verifyBackupCode, is2FAEnabled } from '../auth/2fa';
+import { evaluateAdminLoginAnomaly } from '../services/loginAnomaly';
 
 export const authRoutes = Router();
 
+// Initialize OIDC Strategy (Google/Azure)
+initializeOIDCProviders();
+
 // Mount SSO routes
 authRoutes.use('/sso', createSSORouter());
+authRoutes.use('/sso/oidc', createOIDCRouter());
 
 /**
  * POST /api/auth/login
@@ -92,30 +91,75 @@ authRoutes.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // ── 4. Authentication succeeded: clear lockout state ─────────────────────
-    await recordSuccessfulLogin(lockoutId);
+      const anomaly = await evaluateAdminLoginAnomaly(req, user);
 
-    const payload = {
-      userId: user.id,
-      email: user.phone_number,
-      role: user.role_name || 'user',
-    };
+      if (anomaly.suspicious) {
+        if (!is2FAEnabled(user)) {
+          return res.status(403).json({
+            error: 'Suspicious admin login detected',
+            message:
+              'Anomalous admin login was blocked. Enable two-factor authentication and retry.',
+            requiresTwoFactor: true,
+            anomaly: anomaly.reason,
+          });
+        }
 
-    const token = generateToken(payload);
-    const refreshToken = await generateRefreshToken(user.id);
-    const permissions = await getUserPermissions(user.id);
+        const twoFactorToken = req.headers['x-2fa-token'] as string | undefined;
+        const backupCode = req.body['backupCode'] || req.body['backup_code'];
 
-    res.json({
-      message: 'Login successful',
-      token,
-      refreshToken,
-      user: {
+        let verified2fa = false;
+
+        if (twoFactorToken && user.two_factor_secret) {
+          verified2fa = verifyTOTPToken(user.two_factor_secret, twoFactorToken);
+        }
+
+        if (!verified2fa && backupCode && user.backup_codes) {
+          const backupCodes = user.backup_codes.map((item, index) =>
+            typeof item === 'string'
+              ? {
+                  id: String(index),
+                  code_hash: item,
+                  used: false,
+                  created_at: new Date(),
+                }
+              : item,
+          );
+          const verification = await verifyBackupCode(backupCode, backupCodes);
+          verified2fa = verification.valid;
+        }
+
+        if (!verified2fa) {
+          return res.status(403).json({
+            error: 'Two-factor authentication required',
+            message:
+              'Suspicious admin login detected. Provide X-2FA-Token header or backupCode to continue.',
+            requiresTwoFactor: true,
+            anomaly: anomaly.reason,
+          });
+        }
+      }
+
+      const payload = {
         userId: user.id,
         email: user.phone_number,
         role: user.role_name || 'user',
-        permissions,
-      },
-    });
+      };
+
+      const token = generateToken(payload);
+      const refreshToken = await generateRefreshToken(user.id);
+      const permissions = await getUserPermissions(user.id);
+
+      res.json({
+        message: 'Login successful',
+        token,
+        refreshToken,
+        user: {
+          userId: user.id,
+          email: user.phone_number,
+          role: user.role_name || 'user',
+          permissions,
+        },
+      });
   } catch (error) {
     res.status(500).json({
       error: 'Token generation failed',
