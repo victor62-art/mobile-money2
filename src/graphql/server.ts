@@ -17,6 +17,7 @@ import {
   simpleEstimator,
   fieldExtensionsEstimator,
 } from "graphql-query-complexity";
+import { createAPQCache } from "./apqCache";
 
 // Merge resolvers with subscription resolvers
 const mergedResolvers = {
@@ -33,9 +34,24 @@ export async function startApolloServer(
     resolvers: mergedResolvers,
   });
 
+  // APQ cache — Redis-backed, degrades gracefully on Redis downtime
+  const apqCache = createAPQCache();
+
   const server = new ApolloServer({
     schema,
     context: ({ req }: { req: Request }) => buildGraphqlContext(req),
+
+    // ---------------------------------------------------------------------------
+    // Automatic Persisted Queries (APQ)
+    // Clients send a SHA-256 hash of the query instead of the full string.
+    // On cache miss Apollo returns PersistedQueryNotFound; the client retries
+    // with the full query + hash, which is then stored in Redis for future hits.
+    // ---------------------------------------------------------------------------
+    persistedQueries: {
+      cache: apqCache,
+      // ttl is managed by the cache adapter itself (APQ_TTL_SECONDS env var)
+    },
+
     validationRules: [
       depthLimit(5),
       createComplexityRule({
@@ -78,20 +94,17 @@ export async function startApolloServer(
     {
       schema,
       context: (ctx: any) => {
-        // Extract the request from the WebSocket context
         const req = ctx.extra.request as Request | undefined;
         return buildGraphqlContext(req as Request);
       },
-      onConnect: (ctx: any) => {
-        // Authentication can be performed here if needed
-        // The connectionParams from the client are available in ctx.connectionParams
+      onConnect: (_ctx: any) => {
         console.log("WebSocket subscription connected");
-        return true; // Allow connection
+        return true;
       },
-      onDisconnect: (ctx: any) => {
+      onDisconnect: (_ctx: any) => {
         console.log("WebSocket subscription disconnected");
       },
-      onError: (ctx: any, err: any) => {
+      onError: (_ctx: any, err: any) => {
         console.error("WebSocket subscription error:", err);
       },
     },

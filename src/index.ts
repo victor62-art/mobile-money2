@@ -74,7 +74,7 @@ import { createSep12Router } from "./stellar/sep12";
 import { createSep10Router } from "./stellar/sep10";
 import tomlRouter from "./routes/toml";
 import { startJobs } from "./jobs/scheduler";
-import accountingRoutes from "./routes/accounting";
+import { startApolloServer } from "./graphql/server";
 
 // 1. Import Sentry Middleware
 import { initSentry, sentryBreadcrumbMiddleware } from "./middleware/sentry";
@@ -541,6 +541,10 @@ async function initializeRuntime(): Promise<void> {
 
     wsManager = new WebSocketManager(server);
     console.log("WebSocket server attached");
+
+    // Start Apollo Server with APQ enabled (must run after HTTP server is created)
+    await startApolloServer(app, server);
+    console.log("Apollo GraphQL server started at /graphql");
   }
 }
 
