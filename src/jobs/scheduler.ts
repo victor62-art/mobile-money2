@@ -13,7 +13,7 @@ import { runProviderBalanceAlertJob } from "./balances";
 import { runProviderHealthCheckJob } from "./providerHealthCheck";
 import { runKycTierUpgradeJob } from "./kycTierUpgradeJob";
 import { runLiquidityRebalanceJob } from "./liquidityRebalanceJob";
-import { runSnapshotJob } from "./snapshotJob";
+import { runCrossChainMonitorJob } from "./crossChainMonitorJob";
 
 interface JobConfig {
   name: string;
@@ -89,10 +89,10 @@ const JOBS: JobConfig[] = [
     handler: runLiquidityRebalanceJob,
   },
   {
-    name: "daily-snapshot",
-    // Daily at 23:59:59 - snapshots balances and volume for reporting
-    schedule: process.env.DAILY_SNAPSHOT_CRON || "59 59 23 * * *",
-    handler: runSnapshotJob,
+    name: "cross-chain-monitor",
+    // Every 5 minutes - tracks asset balances across Stellar and mobile money providers
+    schedule: process.env.CROSS_CHAIN_MONITOR_CRON || "*/5 * * * *",
+    handler: runCrossChainMonitorJob,
   },
 ];
 
