@@ -15,6 +15,7 @@ export enum TransactionStatus {
   Completed = "completed",
   Failed = "failed",
   Cancelled = "cancelled",
+  Review = "review",
 }
 
 const MAX_TAGS = 10;
@@ -857,19 +858,4 @@ export class TransactionModel {
       .map((r) => mapTransactionRow(r))
       .filter((t): t is Transaction => t !== null);
   }
-
-  async getBalanceStatistics(userId: string): Promise<{ total_deposited: string; total_withdrawn: string; current_balance: string }> {
-    const result = await queryRead(
-      `SELECT 
-         COALESCE(SUM(amount) FILTER (WHERE type = 'deposit'), 0)::text as total_deposited,
-         COALESCE(SUM(amount) FILTER (WHERE type = 'withdraw'), 0)::text as total_withdrawn,
-         (COALESCE(SUM(amount) FILTER (WHERE type = 'deposit'), 0) - 
-          COALESCE(SUM(amount) FILTER (WHERE type = 'withdraw'), 0))::text as current_balance
-       FROM transactions
-       WHERE user_id = $1 AND status = 'completed'`,
-      [userId]
-    );
-
-    return result.rows[0];
-  }
-}
+}
