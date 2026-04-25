@@ -73,6 +73,25 @@ interface AuthRequest extends Request {
   user?: User;
 }
 
+type BulkActionResult = {
+  userId: string;
+  status: "success" | "failed";
+  message?: string;
+};
+
+const normalizeBulkUserIds = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+
+  const ids = value
+    .filter((id): id is string => typeof id === "string")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+
+  return Array.from(new Set(ids));
+};
+
+const MAX_BULK_IDS = 100;
+
 /**
  * Mock services (replace with real DB/services)
  */
@@ -206,6 +225,212 @@ router.get(
         message: "Failed to retrieve transaction resolution metrics",
         error: err instanceof Error ? err.message : "Unknown error",
       });
+    }
+  },
+);
+
+// POST /api/admin/users/bulk/freeze
+router.post(
+  "/users/bulk/freeze",
+  requireAdmin,
+  logAdminAction("BULK_FREEZE_USERS"),
+  async (req: Request, res: Response) => {
+    try {
+      const adminUser = (req as AuthRequest).user;
+      if (!adminUser) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+
+      const { reason } = req.body;
+      if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
+        return res.status(400).json({
+          message: "A reason is required for freezing an account",
+        });
+      }
+
+      const userIds = normalizeBulkUserIds(req.body?.userIds);
+      if (userIds.length === 0) {
+        return res.status(400).json({
+          message: "userIds must be a non-empty array of user IDs",
+        });
+      }
+
+      if (userIds.length > MAX_BULK_IDS) {
+        return res.status(413).json({
+          message: `Too many userIds supplied (max ${MAX_BULK_IDS})`,
+        });
+      }
+
+      const userModel = new UserModel();
+      const results: BulkActionResult[] = [];
+
+      for (const userId of userIds) {
+        try {
+          const user = await userModel.findById(userId);
+          if (!user) {
+            results.push({
+              userId,
+              status: "failed",
+              message: "User not found",
+            });
+            continue;
+          }
+
+          if (user.status === "frozen") {
+            results.push({
+              userId,
+              status: "failed",
+              message: "User account is already frozen",
+            });
+            continue;
+          }
+
+          const updatedUser = await userModel.updateStatus(
+            userId,
+            "frozen",
+            adminUser.id,
+            reason.trim(),
+            req.ip,
+            req.get("user-agent"),
+          );
+
+          if (!updatedUser) {
+            results.push({
+              userId,
+              status: "failed",
+              message: "Failed to freeze user account",
+            });
+            continue;
+          }
+
+          results.push({ userId, status: "success" });
+        } catch (error) {
+          results.push({
+            userId,
+            status: "failed",
+            message: error instanceof Error ? error.message : "Unknown error",
+          });
+        }
+      }
+
+      const succeeded = results.filter((r) => r.status === "success").length;
+      const failed = results.length - succeeded;
+
+      return res.json({
+        message: "Bulk freeze completed",
+        summary: {
+          total: results.length,
+          succeeded,
+          failed,
+        },
+        results,
+      });
+    } catch (error) {
+      console.error("Error bulk freezing users:", error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  },
+);
+
+// POST /api/admin/users/bulk/unfreeze
+router.post(
+  "/users/bulk/unfreeze",
+  requireAdmin,
+  logAdminAction("BULK_UNFREEZE_USERS"),
+  async (req: Request, res: Response) => {
+    try {
+      const adminUser = (req as AuthRequest).user;
+      if (!adminUser) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+
+      const { reason } = req.body;
+      if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
+        return res.status(400).json({
+          message: "A reason is required for unfreezing an account",
+        });
+      }
+
+      const userIds = normalizeBulkUserIds(req.body?.userIds);
+      if (userIds.length === 0) {
+        return res.status(400).json({
+          message: "userIds must be a non-empty array of user IDs",
+        });
+      }
+
+      if (userIds.length > MAX_BULK_IDS) {
+        return res.status(413).json({
+          message: `Too many userIds supplied (max ${MAX_BULK_IDS})`,
+        });
+      }
+
+      const userModel = new UserModel();
+      const results: BulkActionResult[] = [];
+
+      for (const userId of userIds) {
+        try {
+          const user = await userModel.findById(userId);
+          if (!user) {
+            results.push({
+              userId,
+              status: "failed",
+              message: "User not found",
+            });
+            continue;
+          }
+
+          if (user.status !== "frozen") {
+            results.push({
+              userId,
+              status: "failed",
+              message: "User account is not frozen",
+            });
+            continue;
+          }
+
+          const updatedUser = await userModel.updateStatus(
+            userId,
+            "active",
+            adminUser.id,
+            reason.trim(),
+            req.ip,
+            req.get("user-agent"),
+          );
+
+          if (!updatedUser) {
+            results.push({
+              userId,
+              status: "failed",
+              message: "Failed to unfreeze user account",
+            });
+            continue;
+          }
+
+          results.push({ userId, status: "success" });
+        } catch (error) {
+          results.push({
+            userId,
+            status: "failed",
+            message: error instanceof Error ? error.message : "Unknown error",
+          });
+        }
+      }
+
+      const succeeded = results.filter((r) => r.status === "success").length;
+      const failed = results.length - succeeded;
+
+      return res.json({
+        message: "Bulk unfreeze completed",
+        summary: {
+          total: results.length,
+          succeeded,
+          failed,
+        },
+        results,
+      });
+    } catch (error) {
+      console.error("Error bulk unfreezing users:", error);
+      return res.status(500).json({ message: "Internal server error" });
     }
   },
 );
